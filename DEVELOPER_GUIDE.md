@@ -46,6 +46,36 @@ busctl --user introspect org.gnome.Shell /org/gnome/Shell/Extensions/ActiveWindo
 gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell/Extensions/ActiveWindowDetails --method org.gnome.Shell.Extensions.ActiveWindowDetails.getWinFocusData
 ```
 
+#### 2.1. Configuration UI Caching Issues
+**CRITICAL**: GNOME Shell and Extension Manager heavily cache configuration interfaces and metadata.
+
+- **Adding preferences UI**: Often requires system reboot to appear in Extension Manager
+- **Metadata changes**: Extension Manager may not detect `settings-schema` additions without reboot
+- **GSettings schema changes**: New schema files may not be recognized until session restart
+- **Preferences window updates**: Changes to `prefs.js` may require logout/login or reboot
+
+**Configuration UI Troubleshooting**:
+```bash
+# 1. Verify files are copied correctly
+ls -la ~/.local/share/gnome-shell/extensions/active-window-details@imaginationguild.com/
+cat ~/.local/share/gnome-shell/extensions/active-window-details@imaginationguild.com/metadata.json
+
+# 2. Check schema compilation
+ls -la ~/.local/share/gnome-shell/extensions/active-window-details@imaginationguild.com/schemas/
+
+# 3. Test preferences directly (may work even when Extension Manager doesn't show gear icon)
+gnome-extensions prefs active-window-details@imaginationguild.com
+
+# 4. If gear icon doesn't appear in Extension Manager: REBOOT REQUIRED
+# Extension Manager caching is more aggressive than D-Bus caching
+```
+
+**Why Reboot is Often Required**:
+- Extension Manager loads metadata once and caches it heavily
+- GSettings schema registration happens at session start
+- Preferences UI discovery is part of extension enumeration during shell startup
+- Unlike D-Bus methods, UI changes require deeper shell integration refresh
+
 #### 3. GNOME Shell Restart (Safe Method)
 ```bash
 # Safe GNOME Shell restart (equivalent to Alt+F2 → "r")

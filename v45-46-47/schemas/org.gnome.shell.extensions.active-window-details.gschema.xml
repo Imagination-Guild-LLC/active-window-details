@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="active-window-details">
+  <schema id="org.gnome.shell.extensions.active-window-details" path="/org/gnome/shell/extensions/active-window-details/">
+    <key name="show-about" type="b">
+      <default>true</default>
+      <summary>Show About Information</summary>
+      <description>Controls whether to show about information in preferences</description>
+    </key>
+  </schema>
+</schemalist>
