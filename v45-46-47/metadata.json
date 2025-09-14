@@ -1,0 +1,7 @@
+{  
+  "uuid": "active-window-details@imaginationguild.com",
+  "name": "Active Window Details",
+  "description": "Comprehensive window and process monitoring with application-specific context detection via D-Bus",
+  "shell-version": ["45","46","47"],
+  "url": "https://github.com/Imagination-Guild-LLC/active-window-details"
+}
