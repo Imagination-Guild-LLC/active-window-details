@@ -1248,7 +1248,7 @@ export default class ActiveWindowDetailsExtension {
         } catch (e) {
             // Fallback if metadata reading fails
             return JSON.stringify({
-                version: "1.0.0",
+                version: "0.0.0",
                 name: "Active Window Details",
                 uuid: "active-window-details@imaginationguild.com",
                 error: "Could not read metadata",
