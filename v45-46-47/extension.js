@@ -124,6 +124,10 @@ const DBUS_NODE_INTERFACE = `
         <method name="getAllWindowData">
             <arg type="s" direction="out" />
         </method>
+        <!-- Version Information -->
+        <method name="getVersion">
+            <arg type="s" direction="out" />
+        </method>
     </interface>
 </node>`;
 
@@ -1211,5 +1215,45 @@ export default class ActiveWindowDetailsExtension {
             coreData[field] !== "" && 
             coreData[field] !== 0
         );
+    }
+
+    // ============================================================================
+    // VERSION INFORMATION
+    // ============================================================================
+
+    /**
+     * Get Extension Version
+     * ====================
+     * 
+     * Returns the current version of the Active Window Details extension.
+     * This is useful for debugging, compatibility checks, and automated testing.
+     * 
+     * @returns {string} JSON object with version information
+     */
+    getVersion() {
+        // Read the version from metadata.json
+        try {
+            const Me = imports.misc.extensionUtils.getCurrentExtension();
+            const metadata = Me.metadata;
+            
+            return JSON.stringify({
+                version: metadata.version || "1.0.0",
+                name: metadata.name || "Active Window Details",
+                uuid: metadata.uuid || "active-window-details@imaginationguild.com",
+                description: metadata.description || "",
+                shellVersions: metadata["shell-version"] || ["45", "46", "47"],
+                url: metadata.url || "",
+                timestamp: Date.now()
+            });
+        } catch (e) {
+            // Fallback if metadata reading fails
+            return JSON.stringify({
+                version: "1.0.0",
+                name: "Active Window Details",
+                uuid: "active-window-details@imaginationguild.com",
+                error: "Could not read metadata",
+                timestamp: Date.now()
+            });
+        }
     }
 }
