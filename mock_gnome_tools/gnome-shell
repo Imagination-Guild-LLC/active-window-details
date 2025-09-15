@@ -1,7 +1,0 @@
-#!/bin/bash
-# Mock gnome-shell for testing
-if [[ "$1" == "--replace" ]]; then
-    echo "GNOME Shell replacement initiated (mocked)"
-    exit 0
-fi
-
