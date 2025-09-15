@@ -168,6 +168,79 @@ wait_for_extension() {
     return 1
 }
 
+# Test that extension is NOT listed after uninstall
+test_extension_not_listed() {
+    print_info "Testing that extension is not listed after uninstall..."
+    
+    if ! command -v gnome-extensions &> /dev/null; then
+        print_warning "gnome-extensions command not available - skipping extension list test"
+        return 0
+    fi
+    
+    # Get the extension list
+    local extension_list
+    extension_list=$(gnome-extensions list 2>/dev/null || echo "ERROR")
+    
+    if [[ "$extension_list" == "ERROR" ]]; then
+        print_warning "Could not get extension list - gnome-extensions may not be available"
+        return 0
+    fi
+    
+    print_info "Current extension list:"
+    echo "$extension_list" | while read -r ext; do
+        if [[ -n "$ext" ]]; then
+            print_info "  - $ext"
+        fi
+    done
+    
+    # Check if our extension is in the list
+    if echo "$extension_list" | grep -q "$EXTENSION_UUID"; then
+        print_error "Extension $EXTENSION_UUID is still listed after uninstall!"
+        print_error "This means the uninstall was not complete."
+        return 1
+    else
+        print_success "Extension $EXTENSION_UUID is NOT listed - uninstall was successful!"
+        return 0
+    fi
+}
+
+# Test that extension IS listed after install
+test_extension_is_listed() {
+    print_info "Testing that extension is listed after install..."
+    
+    if ! command -v gnome-extensions &> /dev/null; then
+        print_warning "gnome-extensions command not available - skipping extension list test"
+        return 0
+    fi
+    
+    # Get the extension list
+    local extension_list
+    extension_list=$(gnome-extensions list 2>/dev/null || echo "ERROR")
+    
+    if [[ "$extension_list" == "ERROR" ]]; then
+        print_warning "Could not get extension list - gnome-extensions may not be available"
+        return 0
+    fi
+    
+    print_info "Current extension list:"
+    echo "$extension_list" | while read -r ext; do
+        if [[ -n "$ext" ]]; then
+            print_info "  - $ext"
+        fi
+    done
+    
+    # Check if our extension is in the list
+    if echo "$extension_list" | grep -q "$EXTENSION_UUID"; then
+        print_success "Extension $EXTENSION_UUID is listed - install was successful!"
+        return 0
+    else
+        print_error "Extension $EXTENSION_UUID is NOT listed after install!"
+        print_error "This means the install was not complete or extension list needs refresh."
+        print_warning "Try restarting GNOME Shell: Alt+F2, type 'r', press Enter"
+        return 1
+    fi
+}
+
 # Test version via D-Bus
 test_version_dbus() {
     local expected_version="$1"
@@ -238,6 +311,15 @@ run_test_cycle() {
         print_warning "Uninstall had issues (may not have been installed)"
     fi
     
+    # Step 3.1: Verify extension is not listed after uninstall
+    print_step "3.1" "Verifying Extension Not Listed After Uninstall"
+    if test_extension_not_listed; then
+        print_success "Uninstall verification PASSED!"
+    else
+        print_error "Uninstall verification FAILED!"
+        # Continue with test but note the failure
+    fi
+    
     # Step 4: Update version
     print_step "4" "Updating Version Number"
     if ! update_version "$new_version"; then
@@ -253,6 +335,15 @@ run_test_cycle() {
     else
         print_error "Installation failed"
         exit 1
+    fi
+    
+    # Step 5.1: Verify extension is listed after install
+    print_step "5.1" "Verifying Extension Is Listed After Install"
+    if test_extension_is_listed; then
+        print_success "Install verification PASSED!"
+    else
+        print_error "Install verification FAILED!"
+        # This is a serious issue, but continue to get full test results
     fi
     
     # Step 6: Wait for extension to be ready

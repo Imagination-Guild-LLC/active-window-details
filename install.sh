@@ -210,7 +210,29 @@ uninstall_extension() {
     fi
     
     if $removed; then
-        print_success "Extension uninstalled successfully"
+        print_success "Extension files removed successfully"
+        
+        # Force GNOME Shell to refresh its extension cache
+        print_info "Refreshing GNOME Shell extension cache..."
+        if command -v gdbus &> /dev/null; then
+            # Try to refresh the extension list via D-Bus
+            gdbus call --session \
+                --dest org.gnome.Shell \
+                --object-path /org/gnome/Shell \
+                --method org.gnome.Shell.Eval "Main.extensionManager.scanForExtensions();" &>/dev/null || true
+        fi
+        
+        # Verify the extension is no longer listed
+        sleep 1
+        if gnome-extensions list 2>/dev/null | grep -q "$EXTENSION_UUID"; then
+            print_warning "Extension may still appear in extension list until GNOME Shell is restarted"
+            print_info "To complete the uninstallation:"
+            print_info "  Option 1: Restart GNOME Shell (Alt+F2, type 'r', press Enter)"
+            print_info "  Option 2: Log out and back in"
+            print_info "  Option 3: Reboot the system"
+        else
+            print_success "Extension completely uninstalled and removed from extension list"
+        fi
     else
         print_warning "Extension was not found or already uninstalled"
     fi
