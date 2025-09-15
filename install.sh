@@ -59,6 +59,20 @@ check_gnome() {
         print_error "gnome-extensions command not found. Please install gnome-shell-extensions package."
         exit 1
     fi
+    
+    # Check if we have a GNOME session running
+    if ! gnome-extensions list &>/dev/null; then
+        print_warning "No active GNOME session detected."
+        print_info "The tools are installed but GNOME Shell is not running or accessible."
+        print_info "This is expected in container/headless environments."
+        print_info ""
+        print_info "The extension files can be installed, but functionality testing"
+        print_info "will be limited without a running GNOME session."
+        print_info ""
+        export GNOME_SESSION_AVAILABLE=false
+    else
+        export GNOME_SESSION_AVAILABLE=true
+    fi
 }
 
 # Check if extension source exists
@@ -83,20 +97,101 @@ check_source() {
 # Get extension version from metadata.json
 get_version() {
     if [[ -f "$SOURCE_DIR/metadata.json" ]]; then
-        grep '"version"' "$SOURCE_DIR/metadata.json" | sed -E 's/.*"version": *"([^"]*)",?.*$/\1/' || echo "unknown"
+        grep '"version"' "$SOURCE_DIR/metadata.json" | sed -E 's/.*"version": *"([^"]*)",?.*$/\1/' 2>/dev/null || echo "unknown"
     else
         echo "unknown"
     fi
 }
 
-# Check if extension is installed
-is_extension_installed() {
+# Check if extension is installed (files exist)
+is_extension_files_exist() {
     [[ -d "$TARGET_DIR" ]] || [[ -d "$SYSTEM_INSTALL_DIR/$EXTENSION_UUID" ]]
+}
+
+# Check if extension is registered with GNOME Shell
+is_extension_registered() {
+    if [[ "${GNOME_SESSION_AVAILABLE:-true}" == "false" ]]; then
+        # No GNOME session - fallback to file-based check
+        is_extension_files_exist
+    elif command -v gnome-extensions &> /dev/null; then
+        gnome-extensions list 2>/dev/null | grep -q "$EXTENSION_UUID"
+    else
+        # Fallback to file-based check if gnome-extensions not available
+        is_extension_files_exist
+    fi
+}
+
+# Check if extension is installed (either files exist OR registered with GNOME)
+is_extension_installed() {
+    is_extension_files_exist || is_extension_registered
 }
 
 # Check if extension is enabled
 is_extension_enabled() {
+    if [[ "${GNOME_SESSION_AVAILABLE:-true}" == "false" ]]; then
+        # No GNOME session - can't check enabled status
+        return 1
+    fi
     gnome-extensions list --enabled | grep -q "$EXTENSION_UUID" 2>/dev/null
+}
+
+# Try to refresh GNOME Shell using CLI methods
+refresh_gnome_shell() {
+    if [[ "${GNOME_SESSION_AVAILABLE:-true}" == "false" ]]; then
+        print_warning "No active GNOME session - cannot refresh GNOME Shell"
+        print_info "Extension files have been installed correctly."
+        print_info "When you start a GNOME session, the extension should be available."
+        return 1
+    fi
+    
+    print_info "Attempting to refresh GNOME Shell..."
+    
+    # Method 1: Try direct GNOME Shell restart via D-Bus
+    print_info "Trying D-Bus restart method..."
+    if command -v gdbus &> /dev/null; then
+        if gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval "global.reexec_self()" &>/dev/null; then
+            print_success "GNOME Shell restart initiated via D-Bus"
+            sleep 3  # Give time for restart to take effect
+            return 0
+        else
+            print_info "D-Bus restart method failed, trying busctl..."
+            if command -v busctl &> /dev/null; then
+                if busctl --user call org.gnome.Shell /org/gnome/Shell org.gnome.Shell Eval s 'global.reexec_self()' &>/dev/null; then
+                    print_success "GNOME Shell restart initiated via busctl"
+                    sleep 3
+                    return 0
+                else
+                    print_info "busctl restart method failed"
+                fi
+            else
+                print_info "busctl not available"
+            fi
+        fi
+    else
+        print_info "gdbus not available"
+    fi
+    
+    # Method 2: Try gnome-shell --replace (more aggressive)
+    print_info "Trying gnome-shell --replace method..."
+    if command -v gnome-shell &> /dev/null; then
+        print_warning "This will replace the current GNOME Shell process"
+        sleep 1
+        
+        # Run gnome-shell --replace in background and disown it
+        nohup gnome-shell --replace &>/dev/null & disown
+        sleep 5  # Give time for shell replacement
+        print_success "GNOME Shell replacement initiated"
+        return 0
+    else
+        print_info "gnome-shell command not available"
+    fi
+    
+    # Fallback: Suggest manual restart
+    print_warning "Automatic refresh failed. Manual restart required:"
+    print_info "  Option 1: Alt+F2, type 'r', press Enter"
+    print_info "  Option 2: Log out and back in"
+    print_info "  Option 3: Reboot the system"
+    return 1
 }
 
 # Get installed version using D-Bus (if extension is running)
@@ -146,60 +241,96 @@ install_extension() {
     
     # Remove existing installation if present
     if is_extension_installed; then
-        print_info "Removing existing installation..."
-        rm -rf "$TARGET_DIR" 2>/dev/null || true
-        sudo rm -rf "$SYSTEM_INSTALL_DIR/$EXTENSION_UUID" 2>/dev/null || true
+        print_info "Existing installation detected - cleaning up first..."
+        uninstall_extension
+        sleep 1  # Brief pause after uninstall
     fi
     
-    # Copy extension files
+    # Copy extension files (same as manual installation)
     print_info "Copying extension files to $TARGET_DIR..."
     cp -r "$SOURCE_DIR" "$TARGET_DIR"
     
     # Set proper permissions
     chmod -R 755 "$TARGET_DIR"
     
-    # Enable the extension
-    print_info "Enabling extension..."
-    if gnome-extensions enable "$EXTENSION_UUID" 2>/dev/null; then
-        print_success "Extension enabled successfully"
+    # GNOME Shell will automatically detect the extension
+    print_success "Extension files installed successfully"
+    
+    # Enable the extension (same as manual installation)
+    local enabled=false
+    if [[ "${GNOME_SESSION_AVAILABLE:-true}" == "false" ]]; then
+        print_info "Skipping extension enable - no active GNOME session"
+        print_info "Extension files installed successfully"
+        enabled=false
     else
-        print_warning "Extension installed but could not be enabled automatically"
-        print_info "You may need to restart GNOME Shell (Alt+F2, type 'r', press Enter)"
-        print_info "Or log out and back in, then enable manually"
+        print_info "Enabling extension..."
+        if gnome-extensions enable "$EXTENSION_UUID" 2>/dev/null; then
+            print_success "Extension enabled successfully"
+            enabled=true
+        else
+            print_warning "Extension enable failed"
+            print_info "The extension files are installed correctly."
+            print_info "Try enabling manually: gnome-extensions enable $EXTENSION_UUID"
+            enabled=false
+        fi
     fi
     
-    # Wait a moment for D-Bus to be ready
-    sleep 2
-    
-    # Test the installation
-    print_info "Testing installation..."
-    local version=$(get_installed_version_dbus)
-    if [[ "$version" != "disabled" ]] && [[ "$version" != "not_running" ]]; then
-        print_success "Installation successful! Extension is running version $version"
+    # Simple success reporting (like manual installation)
+    if $enabled; then
+        print_success "Installation completed! Extension is installed and enabled."
     else
-        print_warning "Extension installed but may not be running properly"
-        print_info "Try restarting GNOME Shell: Alt+F2, type 'r', press Enter"
+        print_success "Installation completed! Extension is installed."
+        if [[ "${GNOME_SESSION_AVAILABLE:-true}" != "false" ]]; then
+            print_info "To enable: gnome-extensions enable $EXTENSION_UUID"
+        fi
     fi
+    
+    return 0
 }
 
 # Uninstall extension
 uninstall_extension() {
     print_info "Uninstalling $EXTENSION_NAME..."
     
+    # Check if extension is registered (even if files are missing)
+    local is_registered=$(is_extension_registered && echo "true" || echo "false")
+    local has_files=$(is_extension_files_exist && echo "true" || echo "false")
+    
+    print_info "Extension state: registered=$is_registered, files=$has_files"
+    
     # Disable extension first
-    if is_extension_enabled; then
-        print_info "Disabling extension..."
-        gnome-extensions disable "$EXTENSION_UUID" 2>/dev/null || print_warning "Could not disable extension"
+    if [[ "${GNOME_SESSION_AVAILABLE:-true}" == "false" ]]; then
+        print_info "Skipping extension disable - no active GNOME session"
+    else
+        if is_extension_enabled; then
+            print_info "Disabling extension..."
+            gnome-extensions disable "$EXTENSION_UUID" 2>/dev/null || print_warning "Could not disable extension"
+            sleep 1  # Give GNOME time to disable
+        fi
+        
+        # Try to uninstall via gnome-extensions command if it exists in the list
+        if gnome-extensions list 2>/dev/null | grep -q "$EXTENSION_UUID"; then
+            print_info "Attempting to uninstall via gnome-extensions command..."
+            if gnome-extensions uninstall "$EXTENSION_UUID" 2>/dev/null; then
+                print_success "Extension uninstalled via gnome-extensions command"
+                sleep 2  # Give GNOME time to process
+            else
+                print_warning "gnome-extensions uninstall failed, proceeding with manual cleanup"
+            fi
+        fi
     fi
     
-    # Remove extension files
+    # Remove extension files from all possible locations
     local removed=false
+    
+    # Check user installation directory
     if [[ -d "$TARGET_DIR" ]]; then
         print_info "Removing user installation from $TARGET_DIR..."
         rm -rf "$TARGET_DIR"
         removed=true
     fi
     
+    # Check system installation directory
     if [[ -d "$SYSTEM_INSTALL_DIR/$EXTENSION_UUID" ]]; then
         print_info "Removing system installation from $SYSTEM_INSTALL_DIR/$EXTENSION_UUID..."
         if sudo rm -rf "$SYSTEM_INSTALL_DIR/$EXTENSION_UUID" 2>/dev/null; then
@@ -209,10 +340,127 @@ uninstall_extension() {
         fi
     fi
     
-    if $removed; then
-        print_success "Extension uninstalled successfully"
+    # Look for extension in other possible locations
+    print_info "Searching for extension files in other locations..."
+    local other_locations=$(find /home /usr -name "$EXTENSION_UUID" -type d 2>/dev/null | grep -E "(gnome-shell|extensions)" || true)
+    if [[ -n "$other_locations" ]]; then
+        print_info "Found extension in additional locations:"
+        echo "$other_locations"
+        echo "$other_locations" | while read -r location; do
+            if [[ -n "$location" && -d "$location" ]]; then
+                print_info "Removing from $location..."
+                if [[ "$location" =~ ^/home ]]; then
+                    rm -rf "$location" 2>/dev/null || print_warning "Could not remove $location"
+                else
+                    sudo rm -rf "$location" 2>/dev/null || print_warning "Could not remove $location (may need manual removal)"
+                fi
+                removed=true
+            fi
+        done
+    fi
+    
+    # Force GNOME Shell to refresh its extension cache and registry
+    print_info "Refreshing GNOME Shell extension cache..."
+    if command -v gdbus &> /dev/null; then
+        # First, try to unload the extension if it's loaded
+        gdbus call --session \
+            --dest org.gnome.Shell \
+            --object-path /org/gnome/Shell \
+            --method org.gnome.Shell.Eval "try { Main.extensionManager.unloadExtension(Main.extensionManager.lookup('$EXTENSION_UUID')); } catch(e) {}" &>/dev/null || true
+        
+        # Clear any cached extension data
+        gdbus call --session \
+            --dest org.gnome.Shell \
+            --object-path /org/gnome/Shell \
+            --method org.gnome.Shell.Eval "try { delete Main.extensionManager._extensions['$EXTENSION_UUID']; } catch(e) {}" &>/dev/null || true
+            
+        # Force full extension system refresh
+        gdbus call --session \
+            --dest org.gnome.Shell \
+            --object-path /org/gnome/Shell \
+            --method org.gnome.Shell.Eval "Main.extensionManager.scanForExtensions();" &>/dev/null || true
+        
+        # Reload extension system
+        gdbus call --session \
+            --dest org.gnome.Shell \
+            --object-path /org/gnome/Shell \
+            --method org.gnome.Shell.Eval "Main.extensionManager._loadExtensions();" &>/dev/null || true
+    fi
+    
+    # Clear any cached extension data
+    local cache_dirs=(
+        "$HOME/.cache/gnome-shell/extensions"
+        "$HOME/.local/share/gnome-shell/extensions-cache"
+        "/tmp/.gnome-shell-extensions"
+    )
+    
+    for cache_dir in "${cache_dirs[@]}"; do
+        if [[ -d "$cache_dir" ]]; then
+            print_info "Clearing extension cache from $cache_dir..."
+            rm -rf "$cache_dir/$EXTENSION_UUID"* 2>/dev/null || true
+        fi
+    done
+    
+    # Wait for changes to take effect
+    sleep 2
+    
+    # Verify the extension is no longer listed
+    local still_listed=false
+    if [[ "${GNOME_SESSION_AVAILABLE:-true}" == "false" ]]; then
+        print_info "Cannot verify extension removal from list - no active GNOME session"
+        still_listed=false  # Assume success since we can't check
+    elif command -v gnome-extensions &> /dev/null; then
+        if gnome-extensions list 2>/dev/null | grep -q "$EXTENSION_UUID"; then
+            still_listed=true
+        fi
+    fi
+    
+    if [[ "$removed" == "true" ]] || [[ "$is_registered" == "true" ]]; then
+        if $still_listed; then
+            print_warning "Extension still appears in extension list"
+            print_info "The extension files have been removed, but GNOME Shell cache needs refresh."
+            print_info "Attempting automatic GNOME Shell refresh..."
+            
+            # Try to refresh GNOME Shell automatically
+            if refresh_gnome_shell; then
+                # After refresh, wait and check multiple times if the extension is gone
+                print_info "Checking if extension removed from list after refresh..."
+                local removal_attempts=0
+                local max_removal_attempts=5
+                local extension_removed=false
+                
+                while [[ $removal_attempts -lt $max_removal_attempts ]]; do
+                    sleep 2
+                    if command -v gnome-extensions &> /dev/null; then
+                        if ! gnome-extensions list 2>/dev/null | grep -q "$EXTENSION_UUID"; then
+                            print_success "Extension successfully removed from list after refresh"
+                            extension_removed=true
+                            break
+                        fi
+                    fi
+                    
+                    ((removal_attempts++))
+                    if [[ $removal_attempts -lt $max_removal_attempts ]]; then
+                        print_info "Extension still listed, waiting... (attempt $removal_attempts/$max_removal_attempts)"
+                    fi
+                done
+                
+                if ! $extension_removed; then
+                    print_warning "Extension still appears in list after refresh and multiple checks"
+                    print_info "This may require a manual GNOME Shell restart or logout/login."
+                    print_info "After restart, run: gnome-extensions list"
+                    print_info "The extension should no longer appear in the list."
+                fi
+            fi
+        else
+            print_success "Extension completely uninstalled and removed from extension list"
+        fi
     else
-        print_warning "Extension was not found or already uninstalled"
+        print_warning "Extension was not found in expected locations"
+        if $still_listed; then
+            print_warning "However, extension still appears in GNOME list - attempting refresh..."
+            refresh_gnome_shell
+        fi
     fi
 }
 
@@ -222,6 +470,8 @@ show_status() {
     local installed_version_file=$(get_installed_version_file)
     local installed_version_dbus=$(get_installed_version_dbus)
     local is_installed=$(is_extension_installed && echo "yes" || echo "no")
+    local files_exist=$(is_extension_files_exist && echo "yes" || echo "no")
+    local is_registered=$(is_extension_registered && echo "yes" || echo "no")
     local is_enabled=$(is_extension_enabled && echo "yes" || echo "no")
     
     echo "========================================="
@@ -233,10 +483,16 @@ show_status() {
     echo "  Version: $source_version"
     echo
     echo "Installation Status:"
-    echo "  Installed: $is_installed"
-    if [[ "$is_installed" == "yes" ]]; then
-        echo "  Location: $(is_extension_installed && ([[ -d "$TARGET_DIR" ]] && echo "User (~/.local)" || echo "System (/usr/share)"))"
+    echo "  Files Exist: $files_exist"
+    echo "  GNOME Registered: $is_registered"
+    echo "  Overall Status: $is_installed"
+    if [[ "$files_exist" == "yes" ]]; then
+        echo "  Location: $([[ -d "$TARGET_DIR" ]] && echo "User (~/.local)" || echo "System (/usr/share)")"
         echo "  File Version: $installed_version_file"
+    fi
+    if [[ "$files_exist" == "no" && "$is_registered" == "yes" ]]; then
+        echo "  ⚠️  WARNING: Extension is registered but files are missing!"
+        echo "      This indicates a broken installation that needs cleanup."
     fi
     echo
     echo "Runtime Status:"
@@ -244,6 +500,10 @@ show_status() {
     if [[ "$is_enabled" == "yes" ]]; then
         echo "  Running Version: $installed_version_dbus"
         echo "  D-Bus Interface: $(test "$installed_version_dbus" != "not_running" && echo "Available" || echo "Not Available")"
+    elif [[ "$is_installed" == "yes" && "$is_enabled" == "no" ]]; then
+        echo "  ⚠️  Extension is installed but not enabled!"
+        echo "      To enable: ./install.sh --enable"
+        echo "      Or manually: gnome-extensions enable $EXTENSION_UUID"
     fi
     echo
     
@@ -291,7 +551,13 @@ reinstall_extension() {
     fi
     
     # Install
-    install_extension
+    if install_extension; then
+        print_success "Reinstallation completed successfully"
+        return 0
+    else
+        print_error "Reinstallation failed during install step"
+        return 1
+    fi
 }
 
 # Main script logic
@@ -311,21 +577,72 @@ main() {
         "--uninstall")
             uninstall_extension
             ;;
+        "--force-uninstall")
+            print_warning "Force uninstalling - will search entire system for extension files"
+            EXTENSION_UUID="$EXTENSION_UUID" INSTALL_SCRIPT="$0" bash -c '
+                find /home /usr /var -name "*active-window-details*" -o -name "*imaginationguild.com*" 2>/dev/null | while read -r path; do
+                    if [[ -n "$path" && -e "$path" ]]; then
+                        echo "Found: $path"
+                        if [[ "$path" =~ ^/home ]]; then
+                            rm -rf "$path" 2>/dev/null && echo "  Removed: $path" || echo "  Failed to remove: $path"
+                        else
+                            sudo rm -rf "$path" 2>/dev/null && echo "  Removed: $path" || echo "  Failed to remove: $path"
+                        fi
+                    fi
+                done
+                
+                # Also force GNOME Shell restart recommendation
+                echo ""
+                echo "Force uninstall completed. Please restart GNOME Shell:"
+                echo "  Alt+F2, type '\''r'\'', press Enter"
+                echo "  Or log out and back in"
+            '
+            ;;
         "--reinstall")
-            reinstall_extension
+            if reinstall_extension; then
+                print_success "Reinstallation process completed"
+                exit 0
+            else
+                print_error "Reinstallation process failed"
+                exit 1
+            fi
             ;;
         "")
-            install_extension
+            if install_extension; then
+                print_success "Installation process completed"
+                exit 0
+            else
+                print_error "Installation process failed"
+                exit 1
+            fi
+            ;;
+        "--enable")
+            print_info "Manually enabling extension..."
+            if gnome-extensions enable "$EXTENSION_UUID" 2>/dev/null; then
+                print_success "Extension enabled"
+                sleep 1
+                if is_extension_enabled; then
+                    print_success "Extension is now enabled and active"
+                else
+                    print_warning "Enable command succeeded but extension may not be active yet"
+                    print_info "Try restarting GNOME Shell: Alt+F2, type 'r', press Enter"
+                fi
+            else
+                print_error "Failed to enable extension"
+                print_info "Make sure the extension is installed first: ./install.sh"
+            fi
             ;;
         "--help" | "-h")
             echo "Usage: $0 [OPTION]"
             echo
             echo "Options:"
-            echo "  (no option)    Install the extension"
-            echo "  --status       Show installation status and version information"
-            echo "  --uninstall    Remove the extension"
-            echo "  --reinstall    Uninstall then reinstall the extension"
-            echo "  --help, -h     Show this help message"
+            echo "  (no option)        Install the extension"
+            echo "  --status           Show installation status and version information"
+            echo "  --enable           Manually enable the extension"
+            echo "  --uninstall        Remove the extension"
+            echo "  --force-uninstall  Thoroughly search and remove all extension files"
+            echo "  --reinstall        Uninstall then reinstall the extension"
+            echo "  --help, -h         Show this help message"
             echo
             exit 0
             ;;

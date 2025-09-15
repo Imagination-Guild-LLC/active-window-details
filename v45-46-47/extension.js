@@ -1248,7 +1248,11 @@ export default class ActiveWindowDetailsExtension {
         } catch (e) {
             // Fallback if metadata reading fails
             return JSON.stringify({
+<<<<<<< Current (Your changes)
                 version: "0.0.0",
+=======
+                version: "1.0.0",
+>>>>>>> Incoming (Background Agent changes)
                 name: "Active Window Details",
                 uuid: "active-window-details@imaginationguild.com",
                 error: "Could not read metadata",

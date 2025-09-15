@@ -2,7 +2,11 @@
   "uuid": "active-window-details@imaginationguild.com",
   "name": "Active Window Details",
   "description": "Comprehensive window and process monitoring with application-specific context detection via D-Bus",
+<<<<<<< Current (Your changes)
   "version": "1.0.1",
+=======
+  "version": "1.0.2",
+>>>>>>> Incoming (Background Agent changes)
   "shell-version": ["45","46","47"],
   "url": "https://github.com/Imagination-Guild-LLC/active-window-details"
 }

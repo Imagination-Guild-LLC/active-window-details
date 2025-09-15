@@ -1,0 +1,7 @@
+#!/bin/bash
+# Mock busctl for testing
+if [[ "$*" == *"Meta.restart"* ]]; then
+    echo "GNOME Shell restart initiated via busctl (mocked)"
+    exit 0
+fi
+

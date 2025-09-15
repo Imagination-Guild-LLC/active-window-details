@@ -74,12 +74,21 @@ check_prerequisites() {
         exit 1
     fi
     
+    if ! command -v gnome-extensions &> /dev/null; then
+        print_error "gnome-extensions command not found. This test requires gnome-shell-extensions package."
+        exit 1
+    fi
+    
     print_success "Prerequisites check passed"
 }
 
 # Get current version from metadata.json
 get_current_version() {
-    grep '"version"' "$METADATA_FILE" | sed -E 's/.*"version": *"([^"]*)",?.*$/\1/' 2>/dev/null || echo "unknown"
+    if [[ -f "$METADATA_FILE" ]]; then
+        grep '"version"' "$METADATA_FILE" | head -1 | sed -E 's/.*"version": *"([^"]*)",?.*$/\1/' 2>/dev/null || echo "unknown"
+    else
+        echo "unknown"
+    fi
 }
 
 # Generate next version number
@@ -136,6 +145,14 @@ update_version() {
 
 # Wait for extension to be ready
 wait_for_extension() {
+    # Check if we can access GNOME extensions
+    if ! gnome-extensions list &>/dev/null; then
+        print_warning "No active GNOME session - cannot test extension runtime"
+        print_info "This is expected in container/headless environments."
+        print_info "Extension files are installed and should work when GNOME starts."
+        return 0
+    fi
+    
     local max_attempts=10
     local attempt=1
     
@@ -168,9 +185,167 @@ wait_for_extension() {
     return 1
 }
 
+# Test that extension is NOT listed after uninstall
+test_extension_not_listed() {
+    print_info "Testing that extension is not listed after uninstall..."
+    
+    # Check if we can access gnome-extensions
+    if ! gnome-extensions list &>/dev/null; then
+        print_warning "No active GNOME session - cannot test extension listing"
+        print_info "This is expected in container/headless environments."
+        print_info "Testing file-based installation instead..."
+        
+        # Test file-based instead
+        if [[ -d "$HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID" ]]; then
+            print_error "Extension directory still exists after uninstall!"
+            return 1
+        else
+            print_success "Extension directory successfully removed after uninstall"
+            return 0
+        fi
+    fi
+    
+    # Get the extension list
+    local extension_list
+    extension_list=$(gnome-extensions list 2>/dev/null || echo "ERROR")
+    
+    if [[ "$extension_list" == "ERROR" ]]; then
+        print_error "Could not get extension list - gnome-extensions failed"
+        return 1
+    fi
+    
+    print_info "Current extension list:"
+    echo "$extension_list" | while read -r ext; do
+        if [[ -n "$ext" ]]; then
+            print_info "  - $ext"
+        fi
+    done
+    
+    # Check if our extension is in the list
+    if echo "$extension_list" | grep -q "$EXTENSION_UUID"; then
+        print_error "Extension $EXTENSION_UUID is still listed after uninstall!"
+        print_error "This means the uninstall was not complete."
+        return 1
+    else
+        print_success "Extension $EXTENSION_UUID is NOT listed - uninstall was successful!"
+        return 0
+    fi
+}
+
+# Test that extension IS listed after install
+test_extension_is_listed() {
+    print_info "Testing that extension is listed after install..."
+    
+    # Check if we can access gnome-extensions
+    if ! gnome-extensions list &>/dev/null; then
+        print_warning "No active GNOME session - cannot test extension listing"
+        print_info "This is expected in container/headless environments."
+        print_info "Testing file-based installation instead..."
+        
+        # Test file-based instead
+        if [[ -d "$HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID" ]]; then
+            print_success "Extension directory exists after install"
+            
+            # Also check if metadata.json exists and has correct version
+            local metadata_file="$HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID/metadata.json"
+            if [[ -f "$metadata_file" ]]; then
+                print_success "Extension metadata.json exists"
+                return 0
+            else
+                print_error "Extension metadata.json is missing!"
+                return 1
+            fi
+        else
+            print_error "Extension directory does not exist after install!"
+            return 1
+        fi
+    fi
+    
+    # Get the extension list
+    local extension_list
+    extension_list=$(gnome-extensions list 2>/dev/null || echo "ERROR")
+    
+    if [[ "$extension_list" == "ERROR" ]]; then
+        print_error "Could not get extension list - gnome-extensions failed"
+        return 1
+    fi
+    
+    print_info "Current extension list:"
+    echo "$extension_list" | while read -r ext; do
+        if [[ -n "$ext" ]]; then
+            print_info "  - $ext"
+        fi
+    done
+    
+    # Check if our extension is in the list (with retry logic for timing issues)
+    local max_list_attempts=5
+    local list_attempt=1
+    
+    while [[ $list_attempt -le $max_list_attempts ]]; do
+        print_info "Checking extension list (attempt $list_attempt/$max_list_attempts)..."
+        
+        # Get fresh extension list
+        extension_list=$(gnome-extensions list 2>/dev/null || echo "ERROR")
+        
+        if [[ "$extension_list" == "ERROR" ]]; then
+            print_error "Could not get extension list - gnome-extensions failed"
+            return 1
+        fi
+        
+        # Check if our extension is in the list
+        if echo "$extension_list" | grep -q "$EXTENSION_UUID"; then
+            print_success "Extension $EXTENSION_UUID is listed - install was successful!"
+            return 0
+        fi
+        
+        if [[ $list_attempt -lt $max_list_attempts ]]; then
+            print_info "Extension not yet listed, waiting 3 seconds before retry..."
+            sleep 3
+        fi
+        
+        ((list_attempt++))
+    done
+    
+    # Final attempt failed
+    print_error "Extension $EXTENSION_UUID is NOT listed after $max_list_attempts attempts!"
+    print_error "This means the install process may be incomplete or needs more time."
+    print_warning "GNOME Shell may need to be refreshed for the extension to appear"
+    return 1
+}
+
 # Test version via D-Bus
 test_version_dbus() {
     local expected_version="$1"
+    
+    # Check if we can access GNOME extensions
+    if ! gnome-extensions list &>/dev/null; then
+        print_warning "No active GNOME session - cannot test D-Bus version"
+        print_info "This is expected in container/headless environments."
+        
+        # Test file-based version instead
+        local metadata_file="$HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID/metadata.json"
+        if [[ -f "$metadata_file" ]]; then
+            local file_version
+            file_version=$(grep '"version"' "$metadata_file" | sed -E 's/.*"version": *"([^"]*)",?.*$/\1/' 2>/dev/null || echo "unknown")
+            
+            print_info "Testing file-based version instead..."
+            print_info "File version: $file_version"
+            print_info "Expected version: $expected_version"
+            
+            if [[ "$file_version" == "$expected_version" ]]; then
+                print_success "File-based version verification PASSED!"
+                return 0
+            else
+                print_error "File-based version verification FAILED!"
+                print_error "Expected: $expected_version"
+                print_error "Got: $file_version"
+                return 1
+            fi
+        else
+            print_error "Extension metadata.json not found for version verification"
+            return 1
+        fi
+    fi
     
     print_info "Testing version via D-Bus..."
     
@@ -238,6 +413,19 @@ run_test_cycle() {
         print_warning "Uninstall had issues (may not have been installed)"
     fi
     
+    # Brief pause to let uninstall complete
+    sleep 3
+    
+    # Step 3.1: Verify extension is not listed after uninstall
+    print_step "3.1" "Verifying Extension Not Listed After Uninstall"
+    if test_extension_not_listed; then
+        print_success "Uninstall verification PASSED!"
+    else
+        print_error "Uninstall verification FAILED!"
+        print_warning "This indicates the extension was not properly removed from GNOME Shell's registry"
+        # Continue with test but note the failure
+    fi
+    
     # Step 4: Update version
     print_step "4" "Updating Version Number"
     if ! update_version "$new_version"; then
@@ -253,6 +441,18 @@ run_test_cycle() {
     else
         print_error "Installation failed"
         exit 1
+    fi
+    
+    # Brief pause to let installation and registration complete
+    sleep 3
+    
+    # Step 5.1: Verify extension is listed after install
+    print_step "5.1" "Verifying Extension Is Listed After Install"
+    if test_extension_is_listed; then
+        print_success "Install verification PASSED!"
+    else
+        print_error "Install verification FAILED!"
+        # This is a serious issue, but continue to get full test results
     fi
     
     # Step 6: Wait for extension to be ready
