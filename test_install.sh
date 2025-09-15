@@ -74,6 +74,11 @@ check_prerequisites() {
         exit 1
     fi
     
+    if ! command -v gnome-extensions &> /dev/null; then
+        print_error "gnome-extensions command not found. This test requires gnome-shell-extensions package."
+        exit 1
+    fi
+    
     print_success "Prerequisites check passed"
 }
 
@@ -172,18 +177,13 @@ wait_for_extension() {
 test_extension_not_listed() {
     print_info "Testing that extension is not listed after uninstall..."
     
-    if ! command -v gnome-extensions &> /dev/null; then
-        print_warning "gnome-extensions command not available - skipping extension list test"
-        return 0
-    fi
-    
     # Get the extension list
     local extension_list
     extension_list=$(gnome-extensions list 2>/dev/null || echo "ERROR")
     
     if [[ "$extension_list" == "ERROR" ]]; then
-        print_warning "Could not get extension list - gnome-extensions may not be available"
-        return 0
+        print_error "Could not get extension list - gnome-extensions failed"
+        return 1
     fi
     
     print_info "Current extension list:"
@@ -208,18 +208,13 @@ test_extension_not_listed() {
 test_extension_is_listed() {
     print_info "Testing that extension is listed after install..."
     
-    if ! command -v gnome-extensions &> /dev/null; then
-        print_warning "gnome-extensions command not available - skipping extension list test"
-        return 0
-    fi
-    
     # Get the extension list
     local extension_list
     extension_list=$(gnome-extensions list 2>/dev/null || echo "ERROR")
     
     if [[ "$extension_list" == "ERROR" ]]; then
-        print_warning "Could not get extension list - gnome-extensions may not be available"
-        return 0
+        print_error "Could not get extension list - gnome-extensions failed"
+        return 1
     fi
     
     print_info "Current extension list:"
@@ -229,16 +224,40 @@ test_extension_is_listed() {
         fi
     done
     
-    # Check if our extension is in the list
-    if echo "$extension_list" | grep -q "$EXTENSION_UUID"; then
-        print_success "Extension $EXTENSION_UUID is listed - install was successful!"
-        return 0
-    else
-        print_error "Extension $EXTENSION_UUID is NOT listed after install!"
-        print_error "This means the install was not complete or extension list needs refresh."
-        print_warning "Try restarting GNOME Shell: Alt+F2, type 'r', press Enter"
-        return 1
-    fi
+    # Check if our extension is in the list (with retry logic for timing issues)
+    local max_list_attempts=5
+    local list_attempt=1
+    
+    while [[ $list_attempt -le $max_list_attempts ]]; do
+        print_info "Checking extension list (attempt $list_attempt/$max_list_attempts)..."
+        
+        # Get fresh extension list
+        extension_list=$(gnome-extensions list 2>/dev/null || echo "ERROR")
+        
+        if [[ "$extension_list" == "ERROR" ]]; then
+            print_error "Could not get extension list - gnome-extensions failed"
+            return 1
+        fi
+        
+        # Check if our extension is in the list
+        if echo "$extension_list" | grep -q "$EXTENSION_UUID"; then
+            print_success "Extension $EXTENSION_UUID is listed - install was successful!"
+            return 0
+        fi
+        
+        if [[ $list_attempt -lt $max_list_attempts ]]; then
+            print_info "Extension not yet listed, waiting 3 seconds before retry..."
+            sleep 3
+        fi
+        
+        ((list_attempt++))
+    done
+    
+    # Final attempt failed
+    print_error "Extension $EXTENSION_UUID is NOT listed after $max_list_attempts attempts!"
+    print_error "This means the install process may be incomplete or needs more time."
+    print_warning "GNOME Shell may need to be refreshed for the extension to appear"
+    return 1
 }
 
 # Test version via D-Bus
@@ -336,6 +355,9 @@ run_test_cycle() {
         print_error "Installation failed"
         exit 1
     fi
+    
+    # Brief pause to let installation and registration complete
+    sleep 3
     
     # Step 5.1: Verify extension is listed after install
     print_step "5.1" "Verifying Extension Is Listed After Install"

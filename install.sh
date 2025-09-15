@@ -114,6 +114,47 @@ is_extension_enabled() {
     gnome-extensions list --enabled | grep -q "$EXTENSION_UUID" 2>/dev/null
 }
 
+# Try to refresh GNOME Shell using CLI methods
+refresh_gnome_shell() {
+    print_info "Attempting to refresh GNOME Shell..."
+    
+    # Method 1: Try busctl Meta.restart
+    print_info "Trying busctl restart method..."
+    if command -v busctl &> /dev/null; then
+        if busctl --user call org.gnome.Shell /org/gnome/Shell org.gnome.Shell Eval s 'Meta.restart("")' &>/dev/null; then
+            print_success "GNOME Shell restart initiated via busctl"
+            sleep 3  # Give time for restart to take effect
+            return 0
+        else
+            print_info "busctl restart method failed"
+        fi
+    else
+        print_info "busctl not available"
+    fi
+    
+    # Method 2: Try gnome-shell --replace (more aggressive)
+    print_info "Trying gnome-shell --replace method..."
+    if command -v gnome-shell &> /dev/null; then
+        print_warning "This will replace the current GNOME Shell process"
+        sleep 1
+        
+        # Run gnome-shell --replace in background and disown it
+        nohup gnome-shell --replace &>/dev/null & disown
+        sleep 5  # Give time for shell replacement
+        print_success "GNOME Shell replacement initiated"
+        return 0
+    else
+        print_info "gnome-shell command not available"
+    fi
+    
+    # Fallback: Suggest manual restart
+    print_warning "Automatic refresh failed. Manual restart required:"
+    print_info "  Option 1: Alt+F2, type 'r', press Enter"
+    print_info "  Option 2: Log out and back in"
+    print_info "  Option 3: Reboot the system"
+    return 1
+}
+
 # Get installed version using D-Bus (if extension is running)
 get_installed_version_dbus() {
     if is_extension_enabled; then
@@ -195,10 +236,23 @@ install_extension() {
             ((registration_attempts++))
             if [[ $registration_attempts -lt $max_registration_attempts ]]; then
                 print_info "Extension not yet registered, waiting... (attempt $registration_attempts/$max_registration_attempts)"
-                sleep 1
+                sleep 2  # Longer wait between attempts
             else
-                print_warning "Extension files copied but may not be registered with GNOME Shell yet"
-                print_info "You may need to restart GNOME Shell for it to appear in extension list"
+                print_warning "Extension files copied but not registered with GNOME Shell yet"
+                print_info "Attempting automatic GNOME Shell refresh..."
+                
+                # Try to refresh GNOME Shell automatically
+                if refresh_gnome_shell; then
+                    # After refresh, wait a bit more and check again
+                    print_info "Checking registration after refresh..."
+                    sleep 3
+                    if is_extension_registered; then
+                        print_success "Extension successfully registered after refresh"
+                        break
+                    else
+                        print_warning "Extension still not registered after refresh"
+                    fi
+                fi
             fi
         fi
     done
@@ -387,23 +441,33 @@ uninstall_extension() {
     
     if [[ "$removed" == "true" ]] || [[ "$is_registered" == "true" ]]; then
         if $still_listed; then
-            print_warning "Extension still appears in extension list - manual GNOME Shell restart required"
+            print_warning "Extension still appears in extension list"
             print_info "The extension files have been removed, but GNOME Shell cache needs refresh."
-            print_info "To complete the uninstallation, choose one option:"
-            print_info "  Option 1: Restart GNOME Shell (Alt+F2, type 'r', press Enter)"
-            print_info "  Option 2: Log out and back in"
-            print_info "  Option 3: Reboot the system"
-            print_info ""
-            print_info "After restart, run: gnome-extensions list"
-            print_info "The extension should no longer appear in the list."
+            print_info "Attempting automatic GNOME Shell refresh..."
+            
+            # Try to refresh GNOME Shell automatically
+            if refresh_gnome_shell; then
+                # After refresh, check if the extension is gone from the list
+                print_info "Checking if extension removed from list after refresh..."
+                sleep 2
+                if command -v gnome-extensions &> /dev/null; then
+                    if gnome-extensions list 2>/dev/null | grep -q "$EXTENSION_UUID"; then
+                        print_warning "Extension still appears in list after refresh"
+                        print_info "After restart, run: gnome-extensions list"
+                        print_info "The extension should no longer appear in the list."
+                    else
+                        print_success "Extension successfully removed from list after refresh"
+                    fi
+                fi
+            fi
         else
             print_success "Extension completely uninstalled and removed from extension list"
         fi
     else
         print_warning "Extension was not found in expected locations"
         if $still_listed; then
-            print_warning "However, extension still appears in GNOME list - may need manual cleanup"
-            print_info "Try restarting GNOME Shell: Alt+F2, type 'r', press Enter"
+            print_warning "However, extension still appears in GNOME list - attempting refresh..."
+            refresh_gnome_shell
         fi
     fi
 }

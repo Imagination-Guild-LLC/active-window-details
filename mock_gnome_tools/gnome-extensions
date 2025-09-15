@@ -1,0 +1,30 @@
+#!/bin/bash
+# Mock gnome-extensions for testing
+
+case "$1" in
+    "list")
+        if [[ "$2" == "--enabled" ]]; then
+            if [[ -f "/tmp/mock_extension_enabled" ]]; then
+                echo "active-window-details@imaginationguild.com"
+            fi
+        else
+            if [[ -f "/tmp/mock_extension_installed" ]]; then
+                echo "active-window-details@imaginationguild.com"
+                echo "some-other-extension@example.com"
+            else
+                echo "some-other-extension@example.com"
+            fi
+        fi
+        ;;
+    "enable")
+        touch "/tmp/mock_extension_enabled"
+        exit 0
+        ;;
+    "disable")
+        rm -f "/tmp/mock_extension_enabled"
+        exit 0
+        ;;
+    *)
+        exit 0
+        ;;
+esac
