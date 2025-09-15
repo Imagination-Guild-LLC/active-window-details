@@ -409,12 +409,16 @@ run_test_cycle() {
         print_warning "Uninstall had issues (may not have been installed)"
     fi
     
+    # Brief pause to let uninstall complete
+    sleep 3
+    
     # Step 3.1: Verify extension is not listed after uninstall
     print_step "3.1" "Verifying Extension Not Listed After Uninstall"
     if test_extension_not_listed; then
         print_success "Uninstall verification PASSED!"
     else
         print_error "Uninstall verification FAILED!"
+        print_warning "This indicates the extension was not properly removed from GNOME Shell's registry"
         # Continue with test but note the failure
     fi
     

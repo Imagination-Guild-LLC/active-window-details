@@ -97,7 +97,7 @@ check_source() {
 # Get extension version from metadata.json
 get_version() {
     if [[ -f "$SOURCE_DIR/metadata.json" ]]; then
-        grep '"version"' "$SOURCE_DIR/metadata.json" | sed -E 's/.*"version": *"([^"]*)",?.*$/\1/' || echo "unknown"
+        grep '"version"' "$SOURCE_DIR/metadata.json" | sed -E 's/.*"version": *"([^"]*)",?.*$/\1/' 2>/dev/null || echo "unknown"
     else
         echo "unknown"
     fi
@@ -146,18 +146,29 @@ refresh_gnome_shell() {
     
     print_info "Attempting to refresh GNOME Shell..."
     
-    # Method 1: Try busctl Meta.restart
-    print_info "Trying busctl restart method..."
-    if command -v busctl &> /dev/null; then
-        if busctl --user call org.gnome.Shell /org/gnome/Shell org.gnome.Shell Eval s 'Meta.restart("")' &>/dev/null; then
-            print_success "GNOME Shell restart initiated via busctl"
+    # Method 1: Try direct GNOME Shell restart via D-Bus
+    print_info "Trying D-Bus restart method..."
+    if command -v gdbus &> /dev/null; then
+        if gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval "global.reexec_self()" &>/dev/null; then
+            print_success "GNOME Shell restart initiated via D-Bus"
             sleep 3  # Give time for restart to take effect
             return 0
         else
-            print_info "busctl restart method failed"
+            print_info "D-Bus restart method failed, trying busctl..."
+            if command -v busctl &> /dev/null; then
+                if busctl --user call org.gnome.Shell /org/gnome/Shell org.gnome.Shell Eval s 'global.reexec_self()' &>/dev/null; then
+                    print_success "GNOME Shell restart initiated via busctl"
+                    sleep 3
+                    return 0
+                else
+                    print_info "busctl restart method failed"
+                fi
+            else
+                print_info "busctl not available"
+            fi
         fi
     else
-        print_info "busctl not available"
+        print_info "gdbus not available"
     fi
     
     # Method 2: Try gnome-shell --replace (more aggressive)
@@ -389,6 +400,17 @@ uninstall_extension() {
             gnome-extensions disable "$EXTENSION_UUID" 2>/dev/null || print_warning "Could not disable extension"
             sleep 1  # Give GNOME time to disable
         fi
+        
+        # Try to uninstall via gnome-extensions command if it exists in the list
+        if gnome-extensions list 2>/dev/null | grep -q "$EXTENSION_UUID"; then
+            print_info "Attempting to uninstall via gnome-extensions command..."
+            if gnome-extensions uninstall "$EXTENSION_UUID" 2>/dev/null; then
+                print_success "Extension uninstalled via gnome-extensions command"
+                sleep 2  # Give GNOME time to process
+            else
+                print_warning "gnome-extensions uninstall failed, proceeding with manual cleanup"
+            fi
+        fi
     fi
     
     # Remove extension files from all possible locations
@@ -433,23 +455,29 @@ uninstall_extension() {
     # Force GNOME Shell to refresh its extension cache and registry
     print_info "Refreshing GNOME Shell extension cache..."
     if command -v gdbus &> /dev/null; then
-        # Multiple approaches to refresh the extension system
+        # First, try to unload the extension if it's loaded
+        gdbus call --session \
+            --dest org.gnome.Shell \
+            --object-path /org/gnome/Shell \
+            --method org.gnome.Shell.Eval "try { Main.extensionManager.unloadExtension(Main.extensionManager.lookup('$EXTENSION_UUID')); } catch(e) {}" &>/dev/null || true
+        
+        # Clear any cached extension data
+        gdbus call --session \
+            --dest org.gnome.Shell \
+            --object-path /org/gnome/Shell \
+            --method org.gnome.Shell.Eval "try { delete Main.extensionManager._extensions['$EXTENSION_UUID']; } catch(e) {}" &>/dev/null || true
+            
+        # Force full extension system refresh
         gdbus call --session \
             --dest org.gnome.Shell \
             --object-path /org/gnome/Shell \
             --method org.gnome.Shell.Eval "Main.extensionManager.scanForExtensions();" &>/dev/null || true
         
-        # Also try to reload the extension system
+        # Reload extension system
         gdbus call --session \
             --dest org.gnome.Shell \
             --object-path /org/gnome/Shell \
             --method org.gnome.Shell.Eval "Main.extensionManager._loadExtensions();" &>/dev/null || true
-            
-        # Force a full reload of the extension system
-        gdbus call --session \
-            --dest org.gnome.Shell \
-            --object-path /org/gnome/Shell \
-            --method org.gnome.Shell.Eval "Main.extensionManager.reloadExtension(imports.misc.extensionUtils.extensions['$EXTENSION_UUID']);" &>/dev/null || true
     fi
     
     # Clear any cached extension data
@@ -488,17 +516,33 @@ uninstall_extension() {
             
             # Try to refresh GNOME Shell automatically
             if refresh_gnome_shell; then
-                # After refresh, check if the extension is gone from the list
+                # After refresh, wait and check multiple times if the extension is gone
                 print_info "Checking if extension removed from list after refresh..."
-                sleep 2
-                if command -v gnome-extensions &> /dev/null; then
-                    if gnome-extensions list 2>/dev/null | grep -q "$EXTENSION_UUID"; then
-                        print_warning "Extension still appears in list after refresh"
-                        print_info "After restart, run: gnome-extensions list"
-                        print_info "The extension should no longer appear in the list."
-                    else
-                        print_success "Extension successfully removed from list after refresh"
+                local removal_attempts=0
+                local max_removal_attempts=5
+                local extension_removed=false
+                
+                while [[ $removal_attempts -lt $max_removal_attempts ]]; do
+                    sleep 2
+                    if command -v gnome-extensions &> /dev/null; then
+                        if ! gnome-extensions list 2>/dev/null | grep -q "$EXTENSION_UUID"; then
+                            print_success "Extension successfully removed from list after refresh"
+                            extension_removed=true
+                            break
+                        fi
                     fi
+                    
+                    ((removal_attempts++))
+                    if [[ $removal_attempts -lt $max_removal_attempts ]]; then
+                        print_info "Extension still listed, waiting... (attempt $removal_attempts/$max_removal_attempts)"
+                    fi
+                done
+                
+                if ! $extension_removed; then
+                    print_warning "Extension still appears in list after refresh and multiple checks"
+                    print_info "This may require a manual GNOME Shell restart or logout/login."
+                    print_info "After restart, run: gnome-extensions list"
+                    print_info "The extension should no longer appear in the list."
                 fi
             fi
         else
