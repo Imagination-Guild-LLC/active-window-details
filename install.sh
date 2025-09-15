@@ -175,12 +175,42 @@ install_extension() {
     
     # Enable the extension
     print_info "Enabling extension..."
-    if gnome-extensions enable "$EXTENSION_UUID" 2>/dev/null; then
-        print_success "Extension enabled successfully"
-    else
+    local enable_attempts=0
+    local max_enable_attempts=3
+    local enabled=false
+    
+    while [[ $enable_attempts -lt $max_enable_attempts ]]; do
+        ((enable_attempts++))
+        print_info "Enable attempt $enable_attempts/$max_enable_attempts..."
+        
+        if gnome-extensions enable "$EXTENSION_UUID" 2>/dev/null; then
+            print_info "Enable command succeeded, checking status..."
+            sleep 1
+            
+            if is_extension_enabled; then
+                print_success "Extension enabled successfully"
+                enabled=true
+                break
+            else
+                print_info "Enable command succeeded but extension not showing as enabled yet..."
+            fi
+        else
+            print_info "Enable command failed"
+        fi
+        
+        if [[ $enable_attempts -lt $max_enable_attempts ]]; then
+            print_info "Waiting 2 seconds before retry..."
+            sleep 2
+        fi
+    done
+    
+    if ! $enabled; then
         print_warning "Extension installed but could not be enabled automatically"
-        print_info "You may need to restart GNOME Shell (Alt+F2, type 'r', press Enter)"
-        print_info "Or log out and back in, then enable manually"
+        print_info "The extension files are installed correctly but enabling failed."
+        print_info "To enable the extension:"
+        print_info "  1. Restart GNOME Shell (Alt+F2, type 'r', press Enter)"
+        print_info "  2. Then manually enable: gnome-extensions enable $EXTENSION_UUID"
+        print_info "  3. Or use GNOME Extensions app to enable it"
     fi
     
     # Wait a moment for D-Bus to be ready
@@ -189,11 +219,19 @@ install_extension() {
     # Test the installation
     print_info "Testing installation..."
     local version=$(get_installed_version_dbus)
+    local final_enabled=$(is_extension_enabled && echo "yes" || echo "no")
+    
     if [[ "$version" != "disabled" ]] && [[ "$version" != "not_running" ]]; then
         print_success "Installation successful! Extension is running version $version"
+    elif [[ "$final_enabled" == "yes" ]]; then
+        print_success "Extension is installed and enabled, but D-Bus interface may need a moment"
+        print_info "Extension should be working. If not, try: Alt+F2, type 'r', press Enter"
     else
-        print_warning "Extension installed but may not be running properly"
-        print_info "Try restarting GNOME Shell: Alt+F2, type 'r', press Enter"
+        print_warning "Extension installed but not enabled or running"
+        print_info "To complete the installation:"
+        print_info "  1. Restart GNOME Shell: Alt+F2, type 'r', press Enter"
+        print_info "  2. Then enable: ./install.sh --enable"
+        print_info "  3. Or manually: gnome-extensions enable $EXTENSION_UUID"
     fi
 }
 
@@ -359,6 +397,10 @@ show_status() {
     if [[ "$is_enabled" == "yes" ]]; then
         echo "  Running Version: $installed_version_dbus"
         echo "  D-Bus Interface: $(test "$installed_version_dbus" != "not_running" && echo "Available" || echo "Not Available")"
+    elif [[ "$is_installed" == "yes" && "$is_enabled" == "no" ]]; then
+        echo "  ⚠️  Extension is installed but not enabled!"
+        echo "      To enable: ./install.sh --enable"
+        echo "      Or manually: gnome-extensions enable $EXTENSION_UUID"
     fi
     echo
     
@@ -453,12 +495,29 @@ main() {
         "")
             install_extension
             ;;
+        "--enable")
+            print_info "Manually enabling extension..."
+            if gnome-extensions enable "$EXTENSION_UUID" 2>/dev/null; then
+                print_success "Extension enabled"
+                sleep 1
+                if is_extension_enabled; then
+                    print_success "Extension is now enabled and active"
+                else
+                    print_warning "Enable command succeeded but extension may not be active yet"
+                    print_info "Try restarting GNOME Shell: Alt+F2, type 'r', press Enter"
+                fi
+            else
+                print_error "Failed to enable extension"
+                print_info "Make sure the extension is installed first: ./install.sh"
+            fi
+            ;;
         "--help" | "-h")
             echo "Usage: $0 [OPTION]"
             echo
             echo "Options:"
             echo "  (no option)        Install the extension"
             echo "  --status           Show installation status and version information"
+            echo "  --enable           Manually enable the extension"
             echo "  --uninstall        Remove the extension"
             echo "  --force-uninstall  Thoroughly search and remove all extension files"
             echo "  --reinstall        Uninstall then reinstall the extension"
