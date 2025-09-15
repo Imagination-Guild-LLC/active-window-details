@@ -173,6 +173,36 @@ install_extension() {
     # Set proper permissions
     chmod -R 755 "$TARGET_DIR"
     
+    # Force GNOME Shell to scan for new extensions
+    print_info "Registering extension with GNOME Shell..."
+    if command -v gdbus &> /dev/null; then
+        # Try to refresh the extension list via D-Bus
+        gdbus call --session \
+            --dest org.gnome.Shell \
+            --object-path /org/gnome/Shell \
+            --method org.gnome.Shell.Eval "Main.extensionManager.scanForExtensions();" &>/dev/null || true
+        sleep 2  # Give GNOME Shell time to scan
+    fi
+    
+    # Verify extension is now registered
+    local registration_attempts=0
+    local max_registration_attempts=5
+    while [[ $registration_attempts -lt $max_registration_attempts ]]; do
+        if is_extension_registered; then
+            print_success "Extension successfully registered with GNOME Shell"
+            break
+        else
+            ((registration_attempts++))
+            if [[ $registration_attempts -lt $max_registration_attempts ]]; then
+                print_info "Extension not yet registered, waiting... (attempt $registration_attempts/$max_registration_attempts)"
+                sleep 1
+            else
+                print_warning "Extension files copied but may not be registered with GNOME Shell yet"
+                print_info "You may need to restart GNOME Shell for it to appear in extension list"
+            fi
+        fi
+    done
+    
     # Enable the extension
     print_info "Enabling extension..."
     local enable_attempts=0
@@ -223,15 +253,32 @@ install_extension() {
     
     if [[ "$version" != "disabled" ]] && [[ "$version" != "not_running" ]]; then
         print_success "Installation successful! Extension is running version $version"
+        return 0
     elif [[ "$final_enabled" == "yes" ]]; then
         print_success "Extension is installed and enabled, but D-Bus interface may need a moment"
         print_info "Extension should be working. If not, try: Alt+F2, type 'r', press Enter"
+        return 0
     else
-        print_warning "Extension installed but not enabled or running"
-        print_info "To complete the installation:"
-        print_info "  1. Restart GNOME Shell: Alt+F2, type 'r', press Enter"
-        print_info "  2. Then enable: ./install.sh --enable"
-        print_info "  3. Or manually: gnome-extensions enable $EXTENSION_UUID"
+        # Extension is installed but not enabled - this is still a successful installation
+        local is_files_exist=$(is_extension_files_exist && echo "yes" || echo "no")
+        local is_registered=$(is_extension_registered && echo "yes" || echo "no")
+        
+        if [[ "$is_files_exist" == "yes" ]]; then
+            print_success "Installation completed successfully!"
+            print_info "Extension files installed and accessible."
+            if [[ "$is_registered" == "yes" ]]; then
+                print_info "Extension is registered with GNOME Shell."
+            fi
+            print_warning "Extension is not enabled yet."
+            print_info "To enable the extension:"
+            print_info "  1. Restart GNOME Shell: Alt+F2, type 'r', press Enter"
+            print_info "  2. Then enable: ./install.sh --enable"
+            print_info "  3. Or manually: gnome-extensions enable $EXTENSION_UUID"
+            return 0  # Installation succeeded, enabling failed but that's OK
+        else
+            print_error "Installation failed - extension files not found after copying"
+            return 1  # Actual installation failure
+        fi
     fi
 }
 
@@ -448,7 +495,13 @@ reinstall_extension() {
     fi
     
     # Install
-    install_extension
+    if install_extension; then
+        print_success "Reinstallation completed successfully"
+        return 0
+    else
+        print_error "Reinstallation failed during install step"
+        return 1
+    fi
 }
 
 # Main script logic
@@ -490,10 +543,22 @@ main() {
             '
             ;;
         "--reinstall")
-            reinstall_extension
+            if reinstall_extension; then
+                print_success "Reinstallation process completed"
+                exit 0
+            else
+                print_error "Reinstallation process failed"
+                exit 1
+            fi
             ;;
         "")
-            install_extension
+            if install_extension; then
+                print_success "Installation process completed"
+                exit 0
+            else
+                print_error "Installation process failed"
+                exit 1
+            fi
             ;;
         "--enable")
             print_info "Manually enabling extension..."
