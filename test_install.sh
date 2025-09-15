@@ -141,6 +141,14 @@ update_version() {
 
 # Wait for extension to be ready
 wait_for_extension() {
+    # Check if we can access GNOME extensions
+    if ! gnome-extensions list &>/dev/null; then
+        print_warning "No active GNOME session - cannot test extension runtime"
+        print_info "This is expected in container/headless environments."
+        print_info "Extension files are installed and should work when GNOME starts."
+        return 0
+    fi
+    
     local max_attempts=10
     local attempt=1
     
@@ -177,6 +185,22 @@ wait_for_extension() {
 test_extension_not_listed() {
     print_info "Testing that extension is not listed after uninstall..."
     
+    # Check if we can access gnome-extensions
+    if ! gnome-extensions list &>/dev/null; then
+        print_warning "No active GNOME session - cannot test extension listing"
+        print_info "This is expected in container/headless environments."
+        print_info "Testing file-based installation instead..."
+        
+        # Test file-based instead
+        if [[ -d "$HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID" ]]; then
+            print_error "Extension directory still exists after uninstall!"
+            return 1
+        else
+            print_success "Extension directory successfully removed after uninstall"
+            return 0
+        fi
+    fi
+    
     # Get the extension list
     local extension_list
     extension_list=$(gnome-extensions list 2>/dev/null || echo "ERROR")
@@ -207,6 +231,31 @@ test_extension_not_listed() {
 # Test that extension IS listed after install
 test_extension_is_listed() {
     print_info "Testing that extension is listed after install..."
+    
+    # Check if we can access gnome-extensions
+    if ! gnome-extensions list &>/dev/null; then
+        print_warning "No active GNOME session - cannot test extension listing"
+        print_info "This is expected in container/headless environments."
+        print_info "Testing file-based installation instead..."
+        
+        # Test file-based instead
+        if [[ -d "$HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID" ]]; then
+            print_success "Extension directory exists after install"
+            
+            # Also check if metadata.json exists and has correct version
+            local metadata_file="$HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID/metadata.json"
+            if [[ -f "$metadata_file" ]]; then
+                print_success "Extension metadata.json exists"
+                return 0
+            else
+                print_error "Extension metadata.json is missing!"
+                return 1
+            fi
+        else
+            print_error "Extension directory does not exist after install!"
+            return 1
+        fi
+    fi
     
     # Get the extension list
     local extension_list
@@ -263,6 +312,36 @@ test_extension_is_listed() {
 # Test version via D-Bus
 test_version_dbus() {
     local expected_version="$1"
+    
+    # Check if we can access GNOME extensions
+    if ! gnome-extensions list &>/dev/null; then
+        print_warning "No active GNOME session - cannot test D-Bus version"
+        print_info "This is expected in container/headless environments."
+        
+        # Test file-based version instead
+        local metadata_file="$HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID/metadata.json"
+        if [[ -f "$metadata_file" ]]; then
+            local file_version
+            file_version=$(grep '"version"' "$metadata_file" | sed -E 's/.*"version": *"([^"]*)",?.*$/\1/' 2>/dev/null || echo "unknown")
+            
+            print_info "Testing file-based version instead..."
+            print_info "File version: $file_version"
+            print_info "Expected version: $expected_version"
+            
+            if [[ "$file_version" == "$expected_version" ]]; then
+                print_success "File-based version verification PASSED!"
+                return 0
+            else
+                print_error "File-based version verification FAILED!"
+                print_error "Expected: $expected_version"
+                print_error "Got: $file_version"
+                return 1
+            fi
+        else
+            print_error "Extension metadata.json not found for version verification"
+            return 1
+        fi
+    fi
     
     print_info "Testing version via D-Bus..."
     

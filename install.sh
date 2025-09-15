@@ -59,6 +59,20 @@ check_gnome() {
         print_error "gnome-extensions command not found. Please install gnome-shell-extensions package."
         exit 1
     fi
+    
+    # Check if we have a GNOME session running
+    if ! gnome-extensions list &>/dev/null; then
+        print_warning "No active GNOME session detected."
+        print_info "The tools are installed but GNOME Shell is not running or accessible."
+        print_info "This is expected in container/headless environments."
+        print_info ""
+        print_info "The extension files can be installed, but functionality testing"
+        print_info "will be limited without a running GNOME session."
+        print_info ""
+        export GNOME_SESSION_AVAILABLE=false
+    else
+        export GNOME_SESSION_AVAILABLE=true
+    fi
 }
 
 # Check if extension source exists
@@ -96,7 +110,10 @@ is_extension_files_exist() {
 
 # Check if extension is registered with GNOME Shell
 is_extension_registered() {
-    if command -v gnome-extensions &> /dev/null; then
+    if [[ "${GNOME_SESSION_AVAILABLE:-true}" == "false" ]]; then
+        # No GNOME session - fallback to file-based check
+        is_extension_files_exist
+    elif command -v gnome-extensions &> /dev/null; then
         gnome-extensions list 2>/dev/null | grep -q "$EXTENSION_UUID"
     else
         # Fallback to file-based check if gnome-extensions not available
@@ -111,11 +128,22 @@ is_extension_installed() {
 
 # Check if extension is enabled
 is_extension_enabled() {
+    if [[ "${GNOME_SESSION_AVAILABLE:-true}" == "false" ]]; then
+        # No GNOME session - can't check enabled status
+        return 1
+    fi
     gnome-extensions list --enabled | grep -q "$EXTENSION_UUID" 2>/dev/null
 }
 
 # Try to refresh GNOME Shell using CLI methods
 refresh_gnome_shell() {
+    if [[ "${GNOME_SESSION_AVAILABLE:-true}" == "false" ]]; then
+        print_warning "No active GNOME session - cannot refresh GNOME Shell"
+        print_info "Extension files have been installed correctly."
+        print_info "When you start a GNOME session, the extension should be available."
+        return 1
+    fi
+    
     print_info "Attempting to refresh GNOME Shell..."
     
     # Method 1: Try busctl Meta.restart
@@ -258,35 +286,41 @@ install_extension() {
     done
     
     # Enable the extension
-    print_info "Enabling extension..."
-    local enable_attempts=0
-    local max_enable_attempts=3
     local enabled=false
-    
-    while [[ $enable_attempts -lt $max_enable_attempts ]]; do
-        ((enable_attempts++))
-        print_info "Enable attempt $enable_attempts/$max_enable_attempts..."
+    if [[ "${GNOME_SESSION_AVAILABLE:-true}" == "false" ]]; then
+        print_info "Skipping extension enable - no active GNOME session"
+        print_info "Extension files installed successfully"
+        enabled=false
+    else
+        print_info "Enabling extension..."
+        local enable_attempts=0
+        local max_enable_attempts=3
         
-        if gnome-extensions enable "$EXTENSION_UUID" 2>/dev/null; then
-            print_info "Enable command succeeded, checking status..."
-            sleep 1
+        while [[ $enable_attempts -lt $max_enable_attempts ]]; do
+            ((enable_attempts++))
+            print_info "Enable attempt $enable_attempts/$max_enable_attempts..."
             
-            if is_extension_enabled; then
-                print_success "Extension enabled successfully"
-                enabled=true
-                break
+            if gnome-extensions enable "$EXTENSION_UUID" 2>/dev/null; then
+                print_info "Enable command succeeded, checking status..."
+                sleep 1
+                
+                if is_extension_enabled; then
+                    print_success "Extension enabled successfully"
+                    enabled=true
+                    break
+                else
+                    print_info "Enable command succeeded but extension not showing as enabled yet..."
+                fi
             else
-                print_info "Enable command succeeded but extension not showing as enabled yet..."
+                print_info "Enable command failed"
             fi
-        else
-            print_info "Enable command failed"
-        fi
-        
-        if [[ $enable_attempts -lt $max_enable_attempts ]]; then
-            print_info "Waiting 2 seconds before retry..."
-            sleep 2
-        fi
-    done
+            
+            if [[ $enable_attempts -lt $max_enable_attempts ]]; then
+                print_info "Waiting 2 seconds before retry..."
+                sleep 2
+            fi
+        done
+    fi
     
     if ! $enabled; then
         print_warning "Extension installed but could not be enabled automatically"
@@ -347,10 +381,14 @@ uninstall_extension() {
     print_info "Extension state: registered=$is_registered, files=$has_files"
     
     # Disable extension first
-    if is_extension_enabled; then
-        print_info "Disabling extension..."
-        gnome-extensions disable "$EXTENSION_UUID" 2>/dev/null || print_warning "Could not disable extension"
-        sleep 1  # Give GNOME time to disable
+    if [[ "${GNOME_SESSION_AVAILABLE:-true}" == "false" ]]; then
+        print_info "Skipping extension disable - no active GNOME session"
+    else
+        if is_extension_enabled; then
+            print_info "Disabling extension..."
+            gnome-extensions disable "$EXTENSION_UUID" 2>/dev/null || print_warning "Could not disable extension"
+            sleep 1  # Give GNOME time to disable
+        fi
     fi
     
     # Remove extension files from all possible locations
@@ -433,7 +471,10 @@ uninstall_extension() {
     
     # Verify the extension is no longer listed
     local still_listed=false
-    if command -v gnome-extensions &> /dev/null; then
+    if [[ "${GNOME_SESSION_AVAILABLE:-true}" == "false" ]]; then
+        print_info "Cannot verify extension removal from list - no active GNOME session"
+        still_listed=false  # Assume success since we can't check
+    elif command -v gnome-extensions &> /dev/null; then
         if gnome-extensions list 2>/dev/null | grep -q "$EXTENSION_UUID"; then
             still_listed=true
         fi
