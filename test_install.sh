@@ -84,7 +84,11 @@ check_prerequisites() {
 
 # Get current version from metadata.json
 get_current_version() {
-    grep '"version"' "$METADATA_FILE" | sed -E 's/.*"version": *"([^"]*)",?.*$/\1/' 2>/dev/null || echo "unknown"
+    if [[ -f "$METADATA_FILE" ]]; then
+        grep '"version"' "$METADATA_FILE" | head -1 | sed -E 's/.*"version": *"([^"]*)",?.*$/\1/' 2>/dev/null || echo "unknown"
+    else
+        echo "unknown"
+    fi
 }
 
 # Generate next version number
