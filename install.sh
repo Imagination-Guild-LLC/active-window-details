@@ -246,57 +246,17 @@ install_extension() {
         sleep 1  # Brief pause after uninstall
     fi
     
-    # Copy extension files
+    # Copy extension files (same as manual installation)
     print_info "Copying extension files to $TARGET_DIR..."
     cp -r "$SOURCE_DIR" "$TARGET_DIR"
     
     # Set proper permissions
     chmod -R 755 "$TARGET_DIR"
     
-    # Force GNOME Shell to scan for new extensions
-    print_info "Registering extension with GNOME Shell..."
-    if command -v gdbus &> /dev/null; then
-        # Try to refresh the extension list via D-Bus
-        gdbus call --session \
-            --dest org.gnome.Shell \
-            --object-path /org/gnome/Shell \
-            --method org.gnome.Shell.Eval "Main.extensionManager.scanForExtensions();" &>/dev/null || true
-        sleep 2  # Give GNOME Shell time to scan
-    fi
+    # GNOME Shell will automatically detect the extension
+    print_success "Extension files installed successfully"
     
-    # Verify extension is now registered
-    local registration_attempts=0
-    local max_registration_attempts=5
-    while [[ $registration_attempts -lt $max_registration_attempts ]]; do
-        if is_extension_registered; then
-            print_success "Extension successfully registered with GNOME Shell"
-            break
-        else
-            ((registration_attempts++))
-            if [[ $registration_attempts -lt $max_registration_attempts ]]; then
-                print_info "Extension not yet registered, waiting... (attempt $registration_attempts/$max_registration_attempts)"
-                sleep 2  # Longer wait between attempts
-            else
-                print_warning "Extension files copied but not registered with GNOME Shell yet"
-                print_info "Attempting automatic GNOME Shell refresh..."
-                
-                # Try to refresh GNOME Shell automatically
-                if refresh_gnome_shell; then
-                    # After refresh, wait a bit more and check again
-                    print_info "Checking registration after refresh..."
-                    sleep 3
-                    if is_extension_registered; then
-                        print_success "Extension successfully registered after refresh"
-                        break
-                    else
-                        print_warning "Extension still not registered after refresh"
-                    fi
-                fi
-            fi
-        fi
-    done
-    
-    # Enable the extension
+    # Enable the extension (same as manual installation)
     local enabled=false
     if [[ "${GNOME_SESSION_AVAILABLE:-true}" == "false" ]]; then
         print_info "Skipping extension enable - no active GNOME session"
@@ -304,81 +264,28 @@ install_extension() {
         enabled=false
     else
         print_info "Enabling extension..."
-        local enable_attempts=0
-        local max_enable_attempts=3
-        
-        while [[ $enable_attempts -lt $max_enable_attempts ]]; do
-            ((enable_attempts++))
-            print_info "Enable attempt $enable_attempts/$max_enable_attempts..."
-            
-            if gnome-extensions enable "$EXTENSION_UUID" 2>/dev/null; then
-                print_info "Enable command succeeded, checking status..."
-                sleep 1
-                
-                if is_extension_enabled; then
-                    print_success "Extension enabled successfully"
-                    enabled=true
-                    break
-                else
-                    print_info "Enable command succeeded but extension not showing as enabled yet..."
-                fi
-            else
-                print_info "Enable command failed"
-            fi
-            
-            if [[ $enable_attempts -lt $max_enable_attempts ]]; then
-                print_info "Waiting 2 seconds before retry..."
-                sleep 2
-            fi
-        done
-    fi
-    
-    if ! $enabled; then
-        print_warning "Extension installed but could not be enabled automatically"
-        print_info "The extension files are installed correctly but enabling failed."
-        print_info "To enable the extension:"
-        print_info "  1. Restart GNOME Shell (Alt+F2, type 'r', press Enter)"
-        print_info "  2. Then manually enable: gnome-extensions enable $EXTENSION_UUID"
-        print_info "  3. Or use GNOME Extensions app to enable it"
-    fi
-    
-    # Wait a moment for D-Bus to be ready
-    sleep 2
-    
-    # Test the installation
-    print_info "Testing installation..."
-    local version=$(get_installed_version_dbus)
-    local final_enabled=$(is_extension_enabled && echo "yes" || echo "no")
-    
-    if [[ "$version" != "disabled" ]] && [[ "$version" != "not_running" ]]; then
-        print_success "Installation successful! Extension is running version $version"
-        return 0
-    elif [[ "$final_enabled" == "yes" ]]; then
-        print_success "Extension is installed and enabled, but D-Bus interface may need a moment"
-        print_info "Extension should be working. If not, try: Alt+F2, type 'r', press Enter"
-        return 0
-    else
-        # Extension is installed but not enabled - this is still a successful installation
-        local is_files_exist=$(is_extension_files_exist && echo "yes" || echo "no")
-        local is_registered=$(is_extension_registered && echo "yes" || echo "no")
-        
-        if [[ "$is_files_exist" == "yes" ]]; then
-            print_success "Installation completed successfully!"
-            print_info "Extension files installed and accessible."
-            if [[ "$is_registered" == "yes" ]]; then
-                print_info "Extension is registered with GNOME Shell."
-            fi
-            print_warning "Extension is not enabled yet."
-            print_info "To enable the extension:"
-            print_info "  1. Restart GNOME Shell: Alt+F2, type 'r', press Enter"
-            print_info "  2. Then enable: ./install.sh --enable"
-            print_info "  3. Or manually: gnome-extensions enable $EXTENSION_UUID"
-            return 0  # Installation succeeded, enabling failed but that's OK
+        if gnome-extensions enable "$EXTENSION_UUID" 2>/dev/null; then
+            print_success "Extension enabled successfully"
+            enabled=true
         else
-            print_error "Installation failed - extension files not found after copying"
-            return 1  # Actual installation failure
+            print_warning "Extension enable failed"
+            print_info "The extension files are installed correctly."
+            print_info "Try enabling manually: gnome-extensions enable $EXTENSION_UUID"
+            enabled=false
         fi
     fi
+    
+    # Simple success reporting (like manual installation)
+    if $enabled; then
+        print_success "Installation completed! Extension is installed and enabled."
+    else
+        print_success "Installation completed! Extension is installed."
+        if [[ "${GNOME_SESSION_AVAILABLE:-true}" != "false" ]]; then
+            print_info "To enable: gnome-extensions enable $EXTENSION_UUID"
+        fi
+    fi
+    
+    return 0
 }
 
 # Uninstall extension
